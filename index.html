@@ -10,9 +10,11 @@
         h2 { text-align: center; color: #58a6ff; margin-bottom: 5px; font-size: 22px; }
         .subtitle { text-align: center; color: #8b949e; font-size: 12px; margin-bottom: 15px; }
         
-        .controls { background: #21262d; padding: 10px; border-radius: 8px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 8px; }
-        select { background: #0d1117; color: #fff; border: 1px solid #30363d; padding: 8px; border-radius: 6px; font-size: 14px; width: 100%; outline: none; }
-        
+        .controls { background: #21262d; padding: 12px; border-radius: 8px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
+        select, button { background: #0d1117; color: #fff; border: 1px solid #30363d; padding: 10px; border-radius: 6px; font-size: 14px; width: 100%; outline: none; }
+        button { background: #238636; font-weight: bold; cursor: pointer; border: none; }
+        button:active { background: #2ea043; }
+
         .status { text-align: center; font-size: 13px; font-weight: 500; margin-bottom: 15px; padding: 8px; border-radius: 6px; background: #1f242c; }
         .connected { color: #3fb950; }
         .disconnected { color: #f85149; }
@@ -41,45 +43,57 @@
 
         <div class="controls">
             <div>
-                <label for="symbolSelect" style="font-size: 13px; color: #8b949e;">Market Index:</label>
+                <label style="font-size: 12px; color: #8b949e;">Market Index:</label>
+                <select id="symbolSelect" onchange="changeMarket()">
+                    <option value="R_10">Volatility 10 Index</option>
+                    <option value="R_25">Volatility 25 Index</option>
+                    <option value="R_50">Volatility 50 Index</option>
+                    <option value="R_75">Volatility 75 Index</option>
+                    <option value="R_100" selected>Volatility 100 Index</option>
+                </select>
             </div>
-            <select id="symbolSelect" onchange="changeMarket()">
-                <option value="R_10">Volatility 10 Index</option>
-                <option value="R_25">Volatility 25 Index</option>
-                <option value="R_50">Volatility 50 Index</option>
-                <option value="R_75">Volatility 75 Index</option>
-                <option value="R_100" selected>Volatility 100 Index</option>
-            </select>
+            <button onclick="manualReconnect()">Reconnect to Market</button>
             <div id="sampleInfo" style="font-size: 12px; color: #8b949e; text-align: right;">Rolling Window: 100 Ticks</div>
         </div>
 
         <div id="status" class="status disconnected">Connecting to Deriv WebSocket...</div>
 
-        <div class="stats-grid" id="grid">
-            <!-- Dynamically generated digit cards -->
-        </div>
+        <div class="stats-grid" id="grid"></div>
 
         <div class="recommendation" id="recBox">
             <div class="rec-title">Live Strategy Insight</div>
-            <div id="recText">Waiting for sufficient tick data to calculate frequency distribution...</div>
+            <div id="recText">Waiting for tick data stream...</div>
         </div>
     </div>
 
     <script>
         const appId = 1089;
+        const endpoints = [
+            `wss://ws.derivws.com/websockets/v3?app_id=${appId}`,
+            `wss://ws.binaryws.com/websockets/v3?app_id=${appId}`
+        ];
+        let currentEndpointIndex = 0;
         let currentSymbol = 'R_100';
         const maxTicks = 100;
         let tickHistory = [];
         let digitCounts = Array(10).fill(0);
-        let ws;
+        let ws = null;
 
         function connectWebSocket() {
-            ws = new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${appId}`);
+            if (ws) {
+                ws.close();
+            }
+
+            const url = endpoints[currentEndpointIndex];
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status disconnected';
+            statusEl.innerText = `Connecting via endpoint ${currentEndpointIndex + 1}...`;
+
+            ws = new WebSocket(url);
 
             ws.onopen = function() {
-                const statusEl = document.getElementById('status');
                 statusEl.className = 'status connected';
-                statusEl.innerText = `Connected (${currentSymbol})`;
+                statusEl.innerText = `Connected to ${currentSymbol}`;
                 ws.send(JSON.stringify({ ticks: currentSymbol }));
             };
 
@@ -102,23 +116,27 @@
             };
 
             ws.onerror = function() {
-                const statusEl = document.getElementById('status');
-                statusEl.className = 'status disconnected';
-                statusEl.innerText = 'Connection Error. Reconnecting...';
+                // Try fallback endpoint
+                currentEndpointIndex = (currentEndpointIndex + 1) % endpoints.length;
             };
 
             ws.onclose = function() {
-                const statusEl = document.getElementById('status');
                 statusEl.className = 'status disconnected';
-                statusEl.innerText = 'Disconnected.';
+                statusEl.innerText = 'Connection closed. Tap Reconnect.';
             };
         }
 
+        function manualReconnect() {
+            tickHistory = [];
+            digitCounts = Array(10).fill(0);
+            connectWebSocket();
+        }
+
         function changeMarket() {
-            if (ws) ws.close();
             currentSymbol = document.getElementById('symbolSelect').value;
             tickHistory = [];
             digitCounts = Array(10).fill(0);
+            if (ws) ws.close();
             connectWebSocket();
         }
 
@@ -131,7 +149,7 @@
             let coldestDigits = [];
             let hottestDigits = [];
 
-            if (tickHistory.length >= 20) {
+            if (tickHistory.length >= 10) {
                 for (let i = 0; i < 10; i++) {
                     if (digitCounts[i] < minCount) {
                         minCount = digitCounts[i];
@@ -154,7 +172,7 @@
                 const percentage = tickHistory.length > 0 ? ((count / tickHistory.length) * 100).toFixed(1) : 0;
                 
                 let boxClass = 'digit-box';
-                if (tickHistory.length >= 20) {
+                if (tickHistory.length >= 10) {
                     if (coldestDigits.includes(i)) boxClass += ' highlight-differs';
                     if (hottestDigits.includes(i)) boxClass += ' highlight-matches';
                 }
@@ -169,7 +187,7 @@
                 grid.appendChild(box);
             }
 
-            if (tickHistory.length >= 20) {
+            if (tickHistory.length >= 10) {
                 document.getElementById('recText').innerHTML = 
                     `Last <b>${tickHistory.length}</b> ticks analyzed:<br>` +
                     `• <b>Coldest [Differs]:</b> <span style="color:#f0883e">${coldestDigits.join(', ')}</span> (${((minCount/tickHistory.length)*100).toFixed(1)}%)<br>` +
